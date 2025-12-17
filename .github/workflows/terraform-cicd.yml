@@ -168,8 +168,8 @@ jobs:
         run: terraform output -json
 
   # CD - Deploy to Prod (Manual)
-  terraform-deploy-prod:
-    name: 'CD - Deploy to Prod'
+  terraform-deploy-plan-prod:
+    name: 'CD - Deploy Plan to Prod'
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     environment:
@@ -205,19 +205,57 @@ jobs:
         run: terraform init
 
       - name: Terraform Plan
+        id: plan
         run: terraform plan -input=false
 
-      - name: Wait for Approval
-        uses: trstringer/manual-approval@v1
+      - name: Terraform Output
+        id: output
+        run: terraform output -json
+
+  # CD - Deploy to Prod (Manual)
+  terraform-deploy-apply-prod:
+    name: 'CD - Deploy Apply to Prod'
+    runs-on: ubuntu-latest
+    needs: terraform-deploy-plan-prod
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: prod
+    defaults:
+      run:
+        working-directory: ./terraform/environments/prod
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          secret: ${{ github.TOKEN }}
-          approvers: ${{ github.actor }}
-          minimum-approvals: 1
-          issue-title: "Approve Prod Deployment"
-          issue-body: "Please review the Terraform plan and approve to proceed with deployment to Prod environment."
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Setup Backend Config
+        run: |
+          cat > backend.tf <<EOF
+          terraform {
+            backend "azurerm" {
+              storage_account_name = "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+              container_name       = "tfstate"
+              key                  = "prod.terraform.tfstate"
+              resource_group_name  = "${{ secrets.TF_STATE_RESOURCE_GROUP }}"
+              use_azuread_auth     = true
+            }
+          }
+          EOF
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -out=tfplan -input=false
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve -input=false
+        run: terraform apply -auto-approve -input=false tfplan
 
       - name: Terraform Output
         id: output
