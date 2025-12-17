@@ -151,15 +151,6 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -input=false
 
-      - name: Wait for Approval
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ github.TOKEN }}
-          approvers: ${{ github.actor }}
-          minimum-approvals: 1
-          issue-title: "Approve Dev Deployment"
-          issue-body: "Please review the Terraform plan and approve to proceed with deployment to Dev environment."
-
       - name: Terraform Apply
         run: terraform apply -auto-approve -input=false
 
