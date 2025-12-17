@@ -45,6 +45,16 @@ function Show-MainMenu {
     Write-Host ""
 }
 
+# Function to display email method selection menu
+function Show-EmailMethodMenu {
+    Write-Host ""
+    Write-Host "Select Email Method:" -ForegroundColor Cyan
+    Write-Host "1. ACS Email API" -ForegroundColor Green
+    Write-Host "2. ACS SMTP Relay" -ForegroundColor Green
+    Write-Host "3. Back to Main Menu" -ForegroundColor Yellow
+    Write-Host ""
+}
+
 # Function to send email via Azure Communication Services
 function Send-ACSEmail {
     param(
@@ -117,6 +127,60 @@ function Send-ACSEmail {
             Write-Host "Response: $responseBody" -ForegroundColor Red
         }
         return $false
+    }
+}
+
+# Function to send email via ACS SMTP Relay
+function Send-ACSSMTPEmail {
+    param(
+        [string]$SmtpServer,
+        [int]$SmtpPort,
+        [string]$SmtpUsername,
+        [string]$SmtpPassword,
+        [string]$FromAddress,
+        [string]$ToAddress,
+        [string]$Subject,
+        [string]$Body
+    )
+
+    try {
+        Write-Host "`nSending email via ACS SMTP Relay..." -ForegroundColor Yellow
+        
+        # Create the email message
+        $message = New-Object System.Net.Mail.MailMessage
+        $message.From = $FromAddress
+        $message.To.Add($ToAddress)
+        $message.Subject = $Subject
+        $message.Body = $Body
+        $message.IsBodyHtml = $false
+
+        # Create SMTP client for ACS SMTP Relay
+        $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $SmtpPort)
+        $smtp.EnableSsl = $true  # ACS SMTP requires TLS
+        
+        # ACS SMTP requires authentication
+        if (-not [string]::IsNullOrWhiteSpace($SmtpUsername)) {
+            $securePassword = ConvertTo-SecureString $SmtpPassword -AsPlainText -Force
+            $smtp.Credentials = New-Object System.Management.Automation.PSCredential($SmtpUsername, $securePassword)
+        }
+        else {
+            Write-Host "Warning: ACS SMTP requires authentication credentials." -ForegroundColor Yellow
+        }
+
+        # Send the email
+        $smtp.Send($message)
+        
+        Write-Host "`nEmail sent successfully via ACS SMTP Relay!" -ForegroundColor Green
+        return $true
+    }
+    catch {
+        Write-Host "`nError sending email via ACS SMTP Relay:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        return $false
+    }
+    finally {
+        if ($message) { $message.Dispose() }
+        if ($smtp) { $smtp.Dispose() }
     }
 }
 
@@ -194,20 +258,45 @@ function Send-ACSSMS {
 # Function to handle email sending workflow
 function Start-EmailWorkflow {
     param(
-        [string]$Endpoint,
-        [string]$AccessKey,
-        [string]$DefaultFromAddress
+        [hashtable]$ACSConfig
     )
 
     Write-Host "`n=====================================" -ForegroundColor Cyan
     Write-Host "Send Email" -ForegroundColor Cyan
     Write-Host "=====================================" -ForegroundColor Cyan
+
+    if ($null -eq $ACSConfig) {
+        Write-Host "`nACS not configured. Please configure ACS settings first." -ForegroundColor Red
+        Read-Host "Press Enter to continue"
+        return
+    }
+
+    Show-EmailMethodMenu
+    $method = Read-Host "Select an option (1-3)"
+
+    if ($method -eq "3") {
+        return
+    }
+
+    $useAPI = ($method -eq "1")
+    $useSMTP = ($method -eq "2")
+
+    # Check if SMTP credentials are configured when using SMTP
+    if ($useSMTP) {
+        if ([string]::IsNullOrWhiteSpace($ACSConfig.SmtpUsername) -or [string]::IsNullOrWhiteSpace($ACSConfig.SmtpPassword)) {
+            Write-Host "`nACS SMTP credentials not configured. Please configure ACS settings with SMTP credentials." -ForegroundColor Red
+            Read-Host "Press Enter to continue"
+            return
+        }
+    }
+
     Write-Host ""
 
     # Collect email details
-    $fromAddress = Read-Host "From Email Address [$DefaultFromAddress]"
+    $defaultFrom = $ACSConfig.DefaultFromEmail
+    $fromAddress = Read-Host "From Email Address [$defaultFrom]"
     if ([string]::IsNullOrWhiteSpace($fromAddress)) {
-        $fromAddress = $DefaultFromAddress
+        $fromAddress = $defaultFrom
     }
 
     $toAddress = Read-Host "To Email Address"
@@ -238,7 +327,12 @@ function Start-EmailWorkflow {
 
     $confirm = Read-Host "Send this email? (Y/N)"
     if ($confirm -eq 'Y' -or $confirm -eq 'y') {
-        Send-ACSEmail -Endpoint $Endpoint -AccessKey $AccessKey -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
+        if ($useAPI) {
+            Send-ACSEmail -Endpoint $ACSConfig.Endpoint -AccessKey $ACSConfig.AccessKey -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
+        }
+        elseif ($useSMTP) {
+            Send-ACSSMTPEmail -SmtpServer $ACSConfig.SmtpEndpoint -SmtpPort $ACSConfig.SmtpPort -SmtpUsername $ACSConfig.SmtpUsername -SmtpPassword $ACSConfig.SmtpPassword -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
+        }
     }
     else {
         Write-Host "Email cancelled." -ForegroundColor Yellow
@@ -311,12 +405,26 @@ function Set-ACSConfiguration {
     $fromEmail = Read-Host "Default From Email Address (e.g., donotreply@your-domain.com)"
     $fromPhone = Read-Host "Default From Phone Number (E.164 format, e.g., +1234567890)"
 
+    Write-Host ""
+    Write-Host "--- SMTP Relay Configuration (Optional) ---" -ForegroundColor Cyan
+    Write-Host "For ACS SMTP Relay, get credentials from Azure Portal > Communication Service > Email > Settings" -ForegroundColor Gray
+    $smtpUsername = Read-Host "ACS SMTP Username (leave blank to skip)"
+    $smtpPassword = ""
+    if (-not [string]::IsNullOrWhiteSpace($smtpUsername)) {
+        $secureSmtpPassword = Read-Host "ACS SMTP Password" -AsSecureString
+        $smtpPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureSmtpPassword))
+    }
+
     # Save to a secure configuration file
     $config = @{
         Endpoint = $endpoint
         AccessKey = $accessKeyPlain
         DefaultFromEmail = $fromEmail
         DefaultFromPhone = $fromPhone
+        SmtpEndpoint = "smtp.azurecomm.net"
+        SmtpPort = 587
+        SmtpUsername = $smtpUsername
+        SmtpPassword = $smtpPassword
     } | ConvertTo-Json
 
     $configPath = Join-Path $PSScriptRoot "acs-config.json"
@@ -332,6 +440,10 @@ function Set-ACSConfiguration {
         AccessKey = $accessKeyPlain
         DefaultFromEmail = $fromEmail
         DefaultFromPhone = $fromPhone
+        SmtpEndpoint = "smtp.azurecomm.net"
+        SmtpPort = 587
+        SmtpUsername = $smtpUsername
+        SmtpPassword = $smtpPassword
     }
 }
 
@@ -347,10 +459,14 @@ function Get-ACSConfiguration {
                 AccessKey = $config.AccessKey
                 DefaultFromEmail = $config.DefaultFromEmail
                 DefaultFromPhone = $config.DefaultFromPhone
+                SmtpEndpoint = if ($config.SmtpEndpoint) { $config.SmtpEndpoint } else { "smtp.azurecomm.net" }
+                SmtpPort = if ($config.SmtpPort) { $config.SmtpPort } else { 587 }
+                SmtpUsername = if ($config.SmtpUsername) { $config.SmtpUsername } else { "" }
+                SmtpPassword = if ($config.SmtpPassword) { $config.SmtpPassword } else { "" }
             }
         }
         catch {
-            Write-Host "Error loading configuration file." -ForegroundColor Red
+            Write-Host "Error loading ACS configuration file." -ForegroundColor Red
             return $null
         }
     }
@@ -359,13 +475,7 @@ function Get-ACSConfiguration {
 
 # Main script execution
 function Start-ACSDemo {
-    $config = Get-ACSConfiguration
-
-    if ($null -eq $config) {
-        Write-Host "No configuration found. Please configure your ACS settings first." -ForegroundColor Yellow
-        Read-Host "Press Enter to configure"
-        $config = Set-ACSConfiguration
-    }
+    $acsConfig = Get-ACSConfiguration
 
     $running = $true
     while ($running) {
@@ -374,25 +484,19 @@ function Start-ACSDemo {
 
         switch ($choice) {
             "1" {
-                if ($null -eq $config) {
-                    Write-Host "Please configure ACS settings first." -ForegroundColor Red
-                    Read-Host "Press Enter to continue"
-                }
-                else {
-                    Start-EmailWorkflow -Endpoint $config.Endpoint -AccessKey $config.AccessKey -DefaultFromAddress $config.DefaultFromEmail
-                }
+                Start-EmailWorkflow -ACSConfig $acsConfig
             }
             "2" {
-                if ($null -eq $config) {
+                if ($null -eq $acsConfig) {
                     Write-Host "Please configure ACS settings first." -ForegroundColor Red
                     Read-Host "Press Enter to continue"
                 }
                 else {
-                    Start-SMSWorkflow -Endpoint $config.Endpoint -AccessKey $config.AccessKey -DefaultFromNumber $config.DefaultFromPhone
+                    Start-SMSWorkflow -Endpoint $acsConfig.Endpoint -AccessKey $acsConfig.AccessKey -DefaultFromNumber $acsConfig.DefaultFromPhone
                 }
             }
             "3" {
-                $config = Set-ACSConfiguration
+                $acsConfig = Set-ACSConfiguration
             }
             "4" {
                 Write-Host "`nGoodbye!" -ForegroundColor Cyan
