@@ -21,3 +21,21 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "vm_admin_password" {
+  description = "Admin password for the Windows VM (must meet Azure complexity requirements)"
+  type        = string
+  sensitive   = true
+}
+
+variable "ssl_certificate_data" {
+  description = "Base64 encoded PFX used by the Application Gateway listener"
+  type        = string
+  sensitive   = true
+}
+
+variable "ssl_certificate_password" {
+  description = "Password that protects the PFX payload"
+  type        = string
+  sensitive   = true
+}

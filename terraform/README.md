@@ -95,6 +95,16 @@ Navigate to **Settings → Secrets and variables → Actions** and add:
 - `TF_STATE_STORAGE_ACCOUNT` - Storage account name (e.g., "tfstate<unique>")
 - `TF_STATE_RESOURCE_GROUP` - Resource group name (e.g., "tfstate-rg")
 
+**Terraform Variable Secrets:**
+- `DEV_VM_ADMIN_PASSWORD` - Dev VM admin password (matches `vm_admin_password`)
+- `DEV_SSL_CERT_DATA` - Base64 PFX generated via `Generate-AppGatewayCert.ps1` for Dev
+- `DEV_SSL_CERT_PASSWORD` - Password used when exporting the Dev certificate
+- `PROD_VM_ADMIN_PASSWORD` - Prod VM admin password
+- `PROD_SSL_CERT_DATA` - Base64 PFX for Prod Application Gateway
+- `PROD_SSL_CERT_PASSWORD` - Password used when exporting the Prod certificate
+
+> Run `.\terraform\Generate-AppGatewayCert.ps1` (or supply your own CA-issued PFX) and copy the Base64 output + password into the appropriate secrets. The workflow maps these secrets into Terraform through `TF_VAR_*` environment variables so plans and applies can run without committing sensitive data.
+
 ### 5. Configure GitHub Environments
 
 Navigate to **Settings → Environments** and create:

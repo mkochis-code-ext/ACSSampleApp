@@ -49,3 +49,62 @@ output "email_domain_verification_records" {
   description = "DNS verification records (for custom domains)"
   value       = module.email_domain.verification_records
 }
+
+# Network outputs
+output "vnet_id" {
+  description = "ID of the virtual network"
+  value       = module.virtual_network.id
+}
+
+output "vnet_name" {
+  description = "Name of the virtual network"
+  value       = module.virtual_network.name
+}
+
+# Application Gateway outputs
+output "application_gateway_id" {
+  description = "ID of the Application Gateway"
+  value       = module.application_gateway.id
+}
+
+output "application_gateway_public_ip" {
+  description = "Public IP address of the Application Gateway"
+  value       = module.application_gateway.public_ip_address
+}
+
+output "application_gateway_private_ip" {
+  description = "Private IP address of the Application Gateway"
+  value       = module.application_gateway.private_ip_address
+}
+
+# Bastion outputs
+output "bastion_host_id" {
+  description = "ID of the Azure Bastion Host"
+  value       = module.bastion_host.id
+}
+
+output "bastion_public_ip" {
+  description = "Public IP address of the Bastion Host"
+  value       = module.bastion_host.public_ip_address
+}
+
+# VM outputs
+output "vm_id" {
+  description = "ID of the Windows VM"
+  value       = module.windows_vm.id
+}
+
+output "vm_name" {
+  description = "Name of the Windows VM"
+  value       = module.windows_vm.name
+}
+
+output "vm_private_ip" {
+  description = "Private IP address of the Windows VM"
+  value       = module.windows_vm.private_ip_address
+}
+
+output "vm_admin_username" {
+  description = "Admin username for the Windows VM"
+  value       = module.windows_vm.admin_username
+}

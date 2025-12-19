@@ -45,6 +45,10 @@ jobs:
     defaults:
       run:
         working-directory: ./terraform/environments/dev
+    env:
+      TF_VAR_vm_admin_password: ${{ secrets.DEV_VM_ADMIN_PASSWORD }}
+      TF_VAR_ssl_certificate_data: ${{ secrets.DEV_SSL_CERT_DATA }}
+      TF_VAR_ssl_certificate_password: ${{ secrets.DEV_SSL_CERT_PASSWORD }}
     
     steps:
       - name: Checkout Code
@@ -63,6 +67,7 @@ jobs:
               storage_account_name = "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
               container_name       = "tfstate"
               key                  = "dev.terraform.tfstate"
+              resource_group_name  = "${{ secrets.TF_STATE_RESOURCE_GROUP }}"
               use_azuread_auth     = true
             }
           }
@@ -124,12 +129,16 @@ jobs:
   terraform-deploy-dev:
     name: 'CD - Deploy to Dev'
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.stage == 'Dev' github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.stage == 'Dev' && github.ref == 'refs/heads/main'
     environment:
       name: dev
     defaults:
       run:
         working-directory: ./terraform/environments/dev
+    env:
+      TF_VAR_vm_admin_password: ${{ secrets.DEV_VM_ADMIN_PASSWORD }}
+      TF_VAR_ssl_certificate_data: ${{ secrets.DEV_SSL_CERT_DATA }}
+      TF_VAR_ssl_certificate_password: ${{ secrets.DEV_SSL_CERT_PASSWORD }}
     
     steps:
       - name: Checkout Code
@@ -177,6 +186,10 @@ jobs:
     defaults:
       run:
         working-directory: ./terraform/environments/prod
+    env:
+      TF_VAR_vm_admin_password: ${{ secrets.PROD_VM_ADMIN_PASSWORD }}
+      TF_VAR_ssl_certificate_data: ${{ secrets.PROD_SSL_CERT_DATA }}
+      TF_VAR_ssl_certificate_password: ${{ secrets.PROD_SSL_CERT_PASSWORD }}
     
     steps:
       - name: Checkout Code
@@ -222,6 +235,10 @@ jobs:
     defaults:
       run:
         working-directory: ./terraform/environments/prod
+    env:
+      TF_VAR_vm_admin_password: ${{ secrets.PROD_VM_ADMIN_PASSWORD }}
+      TF_VAR_ssl_certificate_data: ${{ secrets.PROD_SSL_CERT_DATA }}
+      TF_VAR_ssl_certificate_password: ${{ secrets.PROD_SSL_CERT_PASSWORD }}
     
     steps:
       - name: Checkout Code

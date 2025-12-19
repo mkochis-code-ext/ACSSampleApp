@@ -35,3 +35,7 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+terraform/appgw-cert.pfx
+
+# ACS configuration files (may contain secrets)
+dev.acs-config.json
