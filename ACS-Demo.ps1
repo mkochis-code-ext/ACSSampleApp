@@ -3,6 +3,55 @@
 
 #Requires -Version 5.1
 
+# Dev-only helper to bypass TLS validation when using self-signed ACS certificates
+function Disable-TlsCertificateValidation {
+    if (-not ([System.Management.Automation.PSTypeName]'DevTlsBypass').Type) {
+        Add-Type @"
+using System;
+using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
+public static class DevTlsBypass {
+    public static void Enable() {
+        ServicePointManager.ServerCertificateValidationCallback =
+            delegate (object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) { return true; };
+    }
+}
+"@
+    }
+
+    [DevTlsBypass]::Enable()
+    Write-Warning "TLS certificate validation disabled for this PowerShell session. Use only with trusted dev certificates."
+}
+
+Disable-TlsCertificateValidation
+
+function Get-CleanHostName {
+    param(
+        [string]$HostCandidate,
+        [string]$Endpoint
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($HostCandidate)) {
+        $trimmed = $HostCandidate.Trim()
+        if ($trimmed.Contains(":")) {
+            try { return ([System.Uri]$trimmed).Host } catch { }
+            try { return ([System.Uri]("https://$trimmed")).Host } catch { }
+        }
+        if ($trimmed.Contains("/")) {
+            $firstSegment = $trimmed.Split('/')[0]
+            if (-not [string]::IsNullOrWhiteSpace($firstSegment)) { return $firstSegment }
+        }
+        return $trimmed
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Endpoint)) {
+        try { return ([System.Uri]$Endpoint).Host } catch { }
+    }
+
+    return $null
+}
+
 # Function to generate HMAC-SHA256 signature for ACS authentication
 function Get-ACSAuthSignature {
     param(
@@ -29,6 +78,104 @@ function Get-ACSAuthSignature {
     $signature = [Convert]::ToBase64String($hashBytes)
     
     return "HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature=$signature"
+}
+
+function Test-PrivateIpAddress {
+    param([string]$IpAddress)
+
+    if ([string]::IsNullOrWhiteSpace($IpAddress)) { return $false }
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($IpAddress, [ref]$parsed)) { return $false }
+    if ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+
+    $bytes = $parsed.GetAddressBytes()
+    switch ($bytes[0]) {
+        10 { return $true }
+        172 { if ($bytes[1] -ge 16 -and $bytes[1] -le 31) { return $true } }
+        192 { if ($bytes[1] -eq 168) { return $true } }
+        100 { if ($bytes[1] -ge 64 -and $bytes[1] -le 127) { return $true } }
+    }
+    return $false
+}
+
+function Get-NetworkPathInfo {
+    param([string]$TargetHost)
+
+    $result = [ordered]@{
+        Host       = $TargetHost
+        ResolvedIp = $null
+        IsPrivate  = $false
+        Error      = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($TargetHost)) {
+        $result.Error = "No host provided"
+        return $result
+    }
+
+    $resolvedIp = $null
+    $parsed = $null
+    if ([System.Net.IPAddress]::TryParse($TargetHost, [ref]$parsed)) {
+        $resolvedIp = $parsed.ToString()
+    }
+    else {
+        try {
+            $dnsRecord = Resolve-DnsName -Name $TargetHost -Type A -ErrorAction Stop | Select-Object -First 1
+            if ($dnsRecord -and $dnsRecord.IPAddress) {
+                $resolvedIp = $dnsRecord.IPAddress
+            }
+        }
+        catch {
+            try {
+                $dnsAddresses = [System.Net.Dns]::GetHostAddresses($TargetHost)
+                $ipv4 = $dnsAddresses | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork } | Select-Object -First 1
+                if ($ipv4) { $resolvedIp = $ipv4.ToString() }
+            }
+            catch {
+                $result.Error = $_.Exception.Message
+            }
+        }
+    }
+
+    if ($null -eq $resolvedIp) {
+        if (-not $result.Error) { $result.Error = "Unable to resolve host" }
+        return $result
+    }
+
+    $result.ResolvedIp = $resolvedIp
+    $result.IsPrivate = Test-PrivateIpAddress -IpAddress $resolvedIp
+    return $result
+}
+
+function Write-NetworkPathInsight {
+    param(
+        [string]$Operation,
+        [string]$TargetHost,
+        [bool]$ExpectPrivate = $false
+    )
+
+    $info = Get-NetworkPathInfo -TargetHost $TargetHost
+    if ($info.Error) {
+        Write-Host "[$Operation] Unable to resolve $TargetHost ($($info.Error))" -ForegroundColor Yellow
+        return $info
+    }
+
+    if ($info.IsPrivate) {
+        $pathType = "PRIVATE VNet"
+    }
+    else {
+        $pathType = "PUBLIC Internet"
+    }
+    $note = ""
+    if ($ExpectPrivate -and -not $info.IsPrivate) {
+        $note = " - WARNING: host resolved to public IP; traffic will bypass Application Gateway"
+    }
+    elseif ($info.IsPrivate -and $ExpectPrivate) {
+        $note = " - OK: private Application Gateway path"
+    }
+
+    Write-Host "[$Operation] Network path: $($info.Host) -> $($info.ResolvedIp) ($pathType)$note" -ForegroundColor Cyan
+    return $info
 }
 
 # Function to display the main menu
@@ -59,6 +206,7 @@ function Show-EmailMethodMenu {
 function Send-ACSEmail {
     param(
         [string]$Endpoint,
+        [string]$CustomHost,
         [string]$AccessKey,
         [string]$FromAddress,
         [string]$ToAddress,
@@ -91,7 +239,9 @@ function Send-ACSEmail {
 
         # Generate authentication
         $dateString = [DateTime]::UtcNow.ToString("r")
-        $hostName = ([System.Uri]$Endpoint).Host
+        $hostName = Get-CleanHostName -HostCandidate $CustomHost -Endpoint $Endpoint
+        if ([string]::IsNullOrWhiteSpace($hostName)) { throw "Unable to determine valid host name for ACS request." }
+        Write-NetworkPathInsight -Operation "Email API" -TargetHost $hostName -ExpectPrivate $true
         
         # Calculate SHA256 hash of the request body
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -155,6 +305,7 @@ function Send-ACSSMTPEmail {
         $message.IsBodyHtml = $false
 
         # Create SMTP client for ACS SMTP Relay
+        Write-NetworkPathInsight -Operation "ACS SMTP" -TargetHost $SmtpServer
         $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $SmtpPort)
         $smtp.EnableSsl = $true  # ACS SMTP requires TLS
         
@@ -188,6 +339,7 @@ function Send-ACSSMTPEmail {
 function Send-ACSSMS {
     param(
         [string]$Endpoint,
+        [string]$CustomHost,
         [string]$AccessKey,
         [string]$FromNumber,
         [string]$ToNumber,
@@ -216,7 +368,9 @@ function Send-ACSSMS {
 
         # Generate authentication
         $dateString = [DateTime]::UtcNow.ToString("r")
-        $hostName = ([System.Uri]$Endpoint).Host
+        $hostName = Get-CleanHostName -HostCandidate $CustomHost -Endpoint $Endpoint
+        if ([string]::IsNullOrWhiteSpace($hostName)) { throw "Unable to determine valid host name for ACS request." }
+        Write-NetworkPathInsight -Operation "SMS API" -TargetHost $hostName -ExpectPrivate $true
         
         # Calculate SHA256 hash of the request body
         $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -328,7 +482,7 @@ function Start-EmailWorkflow {
     $confirm = Read-Host "Send this email? (Y/N)"
     if ($confirm -eq 'Y' -or $confirm -eq 'y') {
         if ($useAPI) {
-            Send-ACSEmail -Endpoint $ACSConfig.Endpoint -AccessKey $ACSConfig.AccessKey -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
+            Send-ACSEmail -Endpoint $ACSConfig.Endpoint -CustomHost $ACSConfig.Host -AccessKey $ACSConfig.AccessKey -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
         }
         elseif ($useSMTP) {
             Send-ACSSMTPEmail -SmtpServer $ACSConfig.SmtpEndpoint -SmtpPort $ACSConfig.SmtpPort -SmtpUsername $ACSConfig.SmtpUsername -SmtpPassword $ACSConfig.SmtpPassword -FromAddress $fromAddress -ToAddress $toAddress -Subject $subject -Body $body
@@ -345,6 +499,7 @@ function Start-EmailWorkflow {
 function Start-SMSWorkflow {
     param(
         [string]$Endpoint,
+        [string]$CustomHost,
         [string]$AccessKey,
         [string]$DefaultFromNumber
     )
@@ -382,7 +537,7 @@ function Start-SMSWorkflow {
 
     $confirm = Read-Host "Send this SMS? (Y/N)"
     if ($confirm -eq 'Y' -or $confirm -eq 'y') {
-        Send-ACSSMS -Endpoint $Endpoint -AccessKey $AccessKey -FromNumber $fromNumber -ToNumber $toNumber -Message $message
+        Send-ACSSMS -Endpoint $Endpoint -CustomHost $CustomHost -AccessKey $AccessKey -FromNumber $fromNumber -ToNumber $toNumber -Message $message
     }
     else {
         Write-Host "SMS cancelled." -ForegroundColor Yellow
@@ -399,6 +554,12 @@ function Set-ACSConfiguration {
     Write-Host ""
 
     $endpoint = Read-Host "ACS Endpoint (e.g., https://your-acs-resource.communication.azure.com)"
+    $defaultHost = ""
+    try { $defaultHost = ([System.Uri]$endpoint).Host } catch { }
+    $hostPrompt = if ([string]::IsNullOrWhiteSpace($defaultHost)) { "ACS Host (hostname used when calling ACS)" } else { "ACS Host (hostname used when calling ACS) [$defaultHost]" }
+    $hostInput = Read-Host $hostPrompt
+    if ([string]::IsNullOrWhiteSpace($hostInput)) { $hostInput = $defaultHost }
+    $host = Get-CleanHostName -HostCandidate $hostInput -Endpoint $endpoint
     $accessKey = Read-Host "Access Key" -AsSecureString
     $accessKeyPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($accessKey))
     
@@ -418,6 +579,7 @@ function Set-ACSConfiguration {
     # Save to a secure configuration file
     $config = @{
         Endpoint = $endpoint
+        Host = $host
         AccessKey = $accessKeyPlain
         DefaultFromEmail = $fromEmail
         DefaultFromPhone = $fromPhone
@@ -437,6 +599,7 @@ function Set-ACSConfiguration {
     
     return @{
         Endpoint = $endpoint
+        Host = $host
         AccessKey = $accessKeyPlain
         DefaultFromEmail = $fromEmail
         DefaultFromPhone = $fromPhone
@@ -449,13 +612,22 @@ function Set-ACSConfiguration {
 
 # Function to load configuration
 function Get-ACSConfiguration {
+    # Check for dev config first (git-ignored), fall back to main config
+    $devConfigPath = Join-Path $PSScriptRoot "dev.acs-config.json"
     $configPath = Join-Path $PSScriptRoot "acs-config.json"
+    
+    if (Test-Path $devConfigPath) {
+        $configPath = $devConfigPath
+        Write-Host "Loading configuration from dev.acs-config.json" -ForegroundColor Cyan
+    }
     
     if (Test-Path $configPath) {
         try {
             $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
+            $hostValue = Get-CleanHostName -HostCandidate $config.Host -Endpoint $config.Endpoint
             return @{
                 Endpoint = $config.Endpoint
+                Host = $hostValue
                 AccessKey = $config.AccessKey
                 DefaultFromEmail = $config.DefaultFromEmail
                 DefaultFromPhone = $config.DefaultFromPhone
@@ -492,7 +664,7 @@ function Start-ACSDemo {
                     Read-Host "Press Enter to continue"
                 }
                 else {
-                    Start-SMSWorkflow -Endpoint $acsConfig.Endpoint -AccessKey $acsConfig.AccessKey -DefaultFromNumber $acsConfig.DefaultFromPhone
+                    Start-SMSWorkflow -Endpoint $acsConfig.Endpoint -CustomHost $acsConfig.Host -AccessKey $acsConfig.AccessKey -DefaultFromNumber $acsConfig.DefaultFromPhone
                 }
             }
             "3" {

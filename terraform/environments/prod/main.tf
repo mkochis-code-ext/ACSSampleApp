@@ -40,4 +40,12 @@ module acs_project {
   tags = local.tags
   location = var.location
   data_location = var.data_location
+  vnet_address_space = var.vnet_address_space
+  bastion_subnet_prefix = var.bastion_subnet_prefix
+  appgw_subnet_prefix = var.appgw_subnet_prefix
+  vm_subnet_prefix = var.vm_subnet_prefix
+  vm_admin_username = var.vm_admin_username
+  vm_admin_password = var.vm_admin_password
+  ssl_certificate_data     = var.ssl_certificate_data
+  ssl_certificate_password = var.ssl_certificate_password
 }

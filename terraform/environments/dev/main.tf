@@ -40,4 +40,9 @@ module acs_project {
   workload = "pltdemo"
   location = var.location
   data_location = var.data_location
+  
+  # VM credentials
+  vm_admin_password = var.vm_admin_password
+  ssl_certificate_data     = var.ssl_certificate_data
+  ssl_certificate_password = var.ssl_certificate_password
 }
