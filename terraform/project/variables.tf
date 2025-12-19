@@ -107,6 +107,11 @@ variable "ssl_certificate_data" {
   description = "SSL certificate data (base64 encoded PFX) for Application Gateway"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(trimspace(var.ssl_certificate_data)) > 0
+    error_message = "ssl_certificate_data must not be empty. Use Generate-AppGatewayCert.ps1 to create values."
+  }
 }
 
 variable "ssl_certificate_password" {
@@ -115,8 +120,8 @@ variable "ssl_certificate_password" {
   sensitive   = true
 
   validation {
-    condition = length(trimspace(var.ssl_certificate_data)) > 0 && length(trimspace(var.ssl_certificate_password)) > 0
-    error_message = "Provide both ssl_certificate_data and ssl_certificate_password (use Generate-AppGatewayCert.ps1 to create values)."
+    condition     = length(trimspace(var.ssl_certificate_password)) > 0
+    error_message = "ssl_certificate_password must not be empty. Use Generate-AppGatewayCert.ps1 to create values."
   }
 }
 
