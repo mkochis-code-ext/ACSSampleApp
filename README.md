@@ -1,5 +1,7 @@
 # Azure Communication Services Demo Script
 
+> **Disclaimer:** This repository is provided purely as a demonstration of these workflows. You are free to use, modify, and adapt the code as you see fit; however, it is offered as-is with no warranty or support of any kind. Use it at your own risk. This is not production-ready code — it should be reviewed, understood, and rewritten to suit your own environment before any real-world use.
+
 A PowerShell script for sending emails and SMS messages using Azure Communication Services (ACS). Supports both ACS Email API and ACS SMTP Relay methods.
 
 ## Features
